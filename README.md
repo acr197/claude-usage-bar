@@ -1,12 +1,10 @@
 # Claude Usage Bar
 
-Version 0.1.0
+Version 0.2.0
+
+![Clause Usage Bar](screenshot.png)
 
 A thin always-on-top Windows widget that shows your Claude.ai Pro/Max usage (five-hour session + weekly cap) as two progress bars pinned to the bottom of your screen.
-
-## Why this is not a DXT
-
-You originally asked for a DXT. DXT (now .mcpb) extensions package a local MCP server, which only exposes *tools* Claude the model can call during a chat. They cannot render persistent UI in the Claude Desktop app. There is no overlay/chrome hook in the spec. This project is a separate desktop widget that sits above Claude Desktop (or any window) instead.
 
 ## What it does
 
