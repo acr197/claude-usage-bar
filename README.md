@@ -1,76 +1,49 @@
 # Claude Usage Bar
 
-Version 0.2.0
+Version 0.3.0
 
-![Clause Usage Bar](screenshot.png)
+![Claude Usage Bar](screenshot.png)
 
-A thin always-on-top Windows widget that shows your Claude.ai Pro/Max usage (five-hour session + weekly cap) as two progress bars pinned to the bottom of your screen.
-
-## What it does
-
-- Frameless always-on-top bar, 580x34 px, pinned to bottom-center of your primary monitor
-- Two progress bars: five-hour session and weekly cap
-- Polls every 2 minutes
-- Drag to move, right-click for Refresh / Setup / Reset position / Quit
-- Tooltip shows reset times
-- Demo mode on first run so you can verify the UI before wiring real data
+A thin always-on-top Windows widget that shows your Claude.ai Pro and Max usage as two progress bars pinned to the bottom of your screen. Tracks the five-hour session cap and the weekly all-models cap. Polls every two minutes.
 
 ## Install
 
-Requires Python 3.10 or newer on Windows.
+Download `ClaudeUsageBarSetup.exe` from Releases and run it. Installs to Program Files, creates Start Menu and desktop shortcuts, and offers a Windows startup option.
 
-1. Unzip this folder somewhere permanent, like `C:\Tools\claude-usage-bar\`
-2. Double-click `run.bat`
-3. First run creates a `.venv` and installs dependencies
-4. The bar appears at the bottom of your screen in demo mode
+**From source:** requires Python 3.10+ on Windows. Clone the repo, double-click `run.bat`. First run creates a `.venv` and installs dependencies automatically.
 
-## Wiring up real data
+## Usage
 
-Anthropic does not publish a usage API for consumer plans. The `claude.ai/settings/usage` page fetches data from an internal endpoint that is not documented and may change. You have to find it once, paste it into Setup, and the widget handles the rest.
+On first launch the bar shows an error until a session cookie is configured. Open Setup from the right-click menu.
 
-**Steps:**
+1. Open claude.ai in your browser and sign in
+2. Open DevTools (F12), go to the Network tab, reload the page
+3. Click any request to claude.ai, open its Headers panel, copy the full `cookie:` value from Request Headers
+4. Right-click the bar, choose Setup, paste the value into the Cookie field, click Test, then Save
 
-1. Open Chrome, log into claude.ai
-2. Go to `https://claude.ai/settings/usage`
-3. Open DevTools (F12) and switch to the Network tab
-4. Refresh the page, filter by `Fetch/XHR`
-5. Look for a request returning JSON with your usage numbers. Likely named something like `usage`, `bootstrap`, `limits`, or contains `organization` in the path
-6. Right-click the request, "Copy as URL"
-7. Click the response preview and note the JSON path to:
-   - Session percent used (e.g. `usage.session.percent_used`)
-   - Weekly percent used
-   - Session reset time (optional)
-   - Weekly reset time (optional)
-8. Right-click the bar, choose `Setup…`, paste the URL and paths, uncheck **Demo mode**, click Save
+**Controls:**
 
-The widget reads your Chrome cookies automatically (via `browser_cookie3`), so you stay authenticated as long as you're logged into claude.ai in your chosen browser.
+- Click and hold Session or Week to see the reset time in place
+- Click the time display on the right to open the full usage breakdown
+- Drag anywhere on the bar to reposition it
+- Right-click for Refresh, Setup, Reset position, and Quit
 
-## Supported browsers
+**Advanced options** (Setup, expand at bottom): set cookie source browser, enable manual value entry, or enable "Show only when Claude Desktop is running."
 
-`chrome` (default), `edge`, `firefox`, `brave`. Set in Setup.
+## How it works
 
-> **Note on Chrome v127+:** Chrome introduced app-bound cookie encryption that sometimes breaks cookie extraction. If `browser_cookie3` fails on Chrome, try pointing it at Edge or Firefox instead (whichever you also use for claude.ai).
-
-## Config location
-
-`%APPDATA%\ClaudeUsageBar\config.json`
-
-Delete this file to reset to defaults.
-
-## Startup on boot (optional)
-
-1. Press `Win+R`, type `shell:startup`, hit Enter
-2. Drop a shortcut to `run.bat` in there
+Calls `claude.ai/api/organizations/{id}/usage` with your session cookie. Falls back to scraping `claude.ai/settings/usage` if the API path fails. Uses `curl_cffi` with Chrome TLS impersonation to pass Cloudflare bot detection. Cookies are read from your local browser profile via `browser_cookie3` if no cookie is pasted manually.
 
 ## Known limitations
 
-- Internal endpoint may change without notice. If data stops updating, re-check the Network tab and update the URL in Setup.
-- Uses an undocumented endpoint, so treat this as personal-use only and don't hammer it (2-minute poll default is deliberately gentle).
-- Multi-monitor: always pins to primary display. Drag it wherever you want and it'll stay there until restart; use "Reset position" to recenter.
+- Chrome v127+ encrypts cookies at the application level; automatic extraction fails. Paste manually from DevTools. Edge and Firefox are not affected.
+- The usage API is undocumented and may change without notice.
+- Pins to the primary display. Drag to reposition; use Reset position to return to bottom-center.
 
-## Files
+## Privacy
 
-- `claude_usage_bar.py` - main widget
-- `requirements.txt` - Python deps
-- `run.bat` - launcher, creates venv on first run
-- `README.md` - this file
+Your session cookie is stored in `%APPDATA%\ClaudeUsageBar\config.json`. It is sent only to `claude.ai` to fetch usage data. Nothing is sent to any third party.
+
+## Colophon
+
+Published by AppCaddy. Author, Andrew Ryan.
