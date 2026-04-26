@@ -11,7 +11,7 @@
 
 [Setup]
 AppName=Claude Usage Bar
-AppVersion=0.2.0
+AppVersion=0.3.1
 AppPublisher=Claude Usage Bar
 AppPublisherURL=https://github.com/acr197/claude-usage-bar
 AppSupportURL=https://github.com/acr197/claude-usage-bar/issues
@@ -63,8 +63,9 @@ Name: "{group}\Uninstall Claude Usage Bar"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\Claude Usage Bar"; Filename: "{app}\ClaudeUsageBar.exe"
 
 ; Startup shortcut - only created if the user checked the task box above
+; --startup flag tells the app to stay hidden until Claude Desktop is running
 Name: "{autostartup}\Claude Usage Bar"; Filename: "{app}\ClaudeUsageBar.exe"; \
-    Tasks: startup
+    Parameters: "--startup"; Tasks: startup
 
 [Run]
 ; Offer to launch the app immediately after install finishes

@@ -1,6 +1,6 @@
 # ============================================================
 # Claude Usage Bar - always-on-top Windows widget
-# Version 0.3.0
+# Version 0.3.1
 # Shows Claude.ai Pro/Max usage limits as a thin bar pinned to
 # the bottom of your primary monitor.
 #
@@ -25,6 +25,7 @@ import shutil
 import base64
 import tempfile
 import subprocess
+import ctypes
 from pathlib import Path
 from datetime import datetime
 
@@ -1676,10 +1677,22 @@ class UsageBar(QWidget):
             QApplication.quit()
 
     #------------
-    # Launch the details dialog showing all usage bars
+    # Launch the details dialog positioned just above the bar
     #------------
     def _open_details_dialog(self):
         dlg = DetailsDialog(self.latest_data or {}, self.cfg, self)
+        dlg.adjustSize()
+        bar_geo = self.frameGeometry()
+        screen = QGuiApplication.primaryScreen().availableGeometry()
+        dlg_w = max(dlg.sizeHint().width(), 460)
+        dlg_h = dlg.sizeHint().height()
+        x = bar_geo.x() + (bar_geo.width() - dlg_w) // 2
+        y = bar_geo.y() - dlg_h - 8
+        # Clamp horizontally; if it won't fit above, put below instead
+        x = max(screen.x(), min(x, screen.right() - dlg_w))
+        if y < screen.y():
+            y = bar_geo.bottom() + 8
+        dlg.move(x, y)
         dlg.exec()
 
     #------------
@@ -1718,13 +1731,23 @@ class UsageBar(QWidget):
 # App bootstrap
 #------------
 def main():
+    # Prevent multiple instances via a named Windows mutex
+    _mutex = ctypes.windll.kernel32.CreateMutexW(None, False, "ClaudeUsageBar_SingleInstance")
+    if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+        sys.exit(0)
+
+    # --startup is passed from the Windows startup shortcut.
+    # In that mode (or when follow_claude_desktop is on), start hidden if
+    # Claude Desktop isn't already running; the follow-mode timer will
+    # auto-show the bar once Claude Desktop launches.
+    is_startup = "--startup" in sys.argv
+
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(True)
     app.setWindowIcon(make_app_icon())
     bar = UsageBar()
     bar.show()
-    # If follow mode is on and Desktop isn't running yet, start hidden
-    if bar.cfg.get("follow_claude_desktop") and not is_claude_desktop_running():
+    if not is_claude_desktop_running() and (is_startup or bar.cfg.get("follow_claude_desktop")):
         bar.hide()
     sys.exit(app.exec())
 
