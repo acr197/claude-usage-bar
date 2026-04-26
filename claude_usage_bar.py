@@ -1,6 +1,6 @@
 # ============================================================
 # Claude Usage Bar - always-on-top Windows widget
-# Version 0.2.0
+# Version 0.3.0
 # Shows Claude.ai Pro/Max usage limits as a thin bar pinned to
 # the bottom of your primary monitor.
 #
@@ -24,6 +24,7 @@ import sqlite3
 import shutil
 import base64
 import tempfile
+import subprocess
 from pathlib import Path
 from datetime import datetime
 
@@ -46,7 +47,7 @@ from PySide6.QtWidgets import (
     QApplication, QWidget, QLabel, QHBoxLayout, QVBoxLayout,
     QProgressBar, QMenu, QDialog, QLineEdit, QPushButton,
     QFormLayout, QCheckBox, QComboBox, QMessageBox, QSpinBox,
-    QDialogButtonBox, QToolTip
+    QDialogButtonBox
 )
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import (
@@ -98,6 +99,19 @@ def reset_diag():
         pass
 
 #------------
+# Return True if the Claude Desktop process is currently running
+#------------
+def is_claude_desktop_running():
+    try:
+        out = subprocess.run(
+            ["tasklist", "/FI", "IMAGENAME eq Claude.exe", "/NH"],
+            capture_output=True, text=True, timeout=3
+        ).stdout
+        return "Claude.exe" in out
+    except Exception:
+        return False
+
+#------------
 # Generate a 32x32 icon showing two progress bars on a dark background
 #------------
 def make_app_icon():
@@ -132,7 +146,8 @@ DEFAULT_CONFIG = {
     "manual_session_pct": 0,
     "manual_weekly_pct": 0,
     "manual_session_reset": "",
-    "manual_weekly_reset": ""
+    "manual_weekly_reset": "",
+    "follow_claude_desktop": False
 }
 
 #------------
@@ -267,7 +282,9 @@ def copy_locked_file(src, dst):
 print("copy_locked_file ready")
 
 #------------
-# Read claude.ai cookies straight from Claude Desktop's store
+# Read claude.ai cookies straight from Claude Desktop's store.
+# Tries SQLite immutable mode first (works while the app is running),
+# then falls back to copying the file.
 #------------
 def get_claude_desktop_cookies():
     db_path = find_claude_desktop_cookie_db()
@@ -283,17 +300,77 @@ def get_claude_desktop_cookies():
     key = get_claude_desktop_key()
     diag(f"aes key: {'found' if key else 'MISSING'}")
 
-    # Copy the main DB plus its WAL and SHM companion files into the same
-    # temp directory. SQLite in WAL mode stores recent writes in the
-    # `-wal` file until it gets checkpointed to the main DB. If we copy
-    # only the main file while Claude Desktop is running, we get an empty
-    # or stale snapshot. SQLite will replay WAL automatically when opening.
+    def read_from(conn_str):
+        # Read and decrypt all claude.ai cookies from the given SQLite URI.
+        cookies = {}
+        encrypted_fail = encrypted_ok = plain_ok = 0
+        conn = sqlite3.connect(conn_str, uri=True)
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            tables = [r[0] for r in cur.fetchall()]
+            diag(f"tables: {tables}")
+            cookie_table = next(
+                (t for t in ("cookies", "moz_cookies") if t in tables), None
+            )
+            if not cookie_table:
+                raise RuntimeError(f"No cookies table. Tables: {tables}")
+            cur.execute(f"PRAGMA table_info({cookie_table})")
+            cols = [r[1] for r in cur.fetchall()]
+            enc_col = "encrypted_value" if "encrypted_value" in cols else None
+            host_col = next(
+                (c for c in ("host_key", "host", "domain") if c in cols), None
+            )
+            if not host_col:
+                raise RuntimeError(f"No host column: {cols}")
+            select_cols = "name, value" + (f", {enc_col}" if enc_col else "")
+            sql = (
+                f"SELECT {select_cols} FROM {cookie_table} "
+                f"WHERE {host_col} LIKE '%claude.ai%'"
+            )
+            cur.execute(sql)
+            for row in cur.fetchall():
+                name, value = row[0], row[1]
+                enc = row[2] if enc_col else None
+                if value:
+                    cookies[name] = value
+                    plain_ok += 1
+                else:
+                    decoded = decrypt_value(enc, key) if enc else ""
+                    if decoded:
+                        cookies[name] = decoded
+                        encrypted_ok += 1
+                    else:
+                        encrypted_fail += 1
+        finally:
+            conn.close()
+        diag(
+            f"cookies: plain={plain_ok} ok_enc={encrypted_ok} "
+            f"fail_enc={encrypted_fail} names={sorted(cookies.keys())}"
+        )
+        return cookies
+
+    # SQLite URI paths must use forward slashes on Windows
+    def to_uri(p):
+        return str(p).replace("\\", "/")
+
+    # Attempt 1: immutable=1 tells SQLite to skip all locking, so this
+    # succeeds even when Claude Desktop has the file exclusively locked.
+    try:
+        cookies = read_from(f"file:{to_uri(db_path)}?mode=ro&immutable=1")
+        if cookies.get("sessionKey"):
+            diag("immutable direct read succeeded")
+            return cookies
+        diag("immutable read: no sessionKey — trying copy fallback")
+    except Exception as e:
+        diag(f"immutable read failed: {e} — trying copy fallback")
+
+    # Attempt 2: copy the file first (handles WAL mode edge cases).
     tmp_dir = Path(tempfile.mkdtemp(prefix="cub_"))
     main_dst = tmp_dir / "Cookies"
     try:
         copy_locked_file(db_path, main_dst)
         diag(f"copied main db: {os.path.getsize(main_dst)} bytes")
-        # Also copy companion files if they exist
         for suffix in ("-wal", "-shm", "-journal"):
             companion = Path(str(db_path) + suffix)
             if companion.exists():
@@ -303,84 +380,15 @@ def get_claude_desktop_cookies():
                     diag(f"copied {suffix}: {os.path.getsize(dst)} bytes")
                 except Exception as e:
                     diag(f"failed to copy {suffix}: {e}")
+        return read_from(f"file:{to_uri(main_dst)}?mode=ro")
     except Exception as e:
-        diag(f"copy failed: {e}")
+        diag(f"copy approach also failed: {e}")
         raise
-
-    cookies = {}
-    encrypted_fail = 0
-    encrypted_ok = 0
-    plain_ok = 0
-    try:
-        # URI mode lets us open SQLite read-only so we don't trip on locks
-        conn = sqlite3.connect(f"file:{main_dst}?mode=ro", uri=True)
-        cur = conn.cursor()
-        cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
-        tables = [r[0] for r in cur.fetchall()]
-        diag(f"tables in db: {tables}")
-
-        cookie_table = None
-        for candidate in ("cookies", "moz_cookies"):
-            if candidate in tables:
-                cookie_table = candidate
-                break
-        if not cookie_table:
-            raise RuntimeError(f"No cookies table found. Tables: {tables}")
-
-        cur.execute(f"PRAGMA table_info({cookie_table})")
-        cols = [r[1] for r in cur.fetchall()]
-        diag(f"columns in {cookie_table}: {cols}")
-
-        name_col = "name"
-        value_col = "value"
-        enc_col = "encrypted_value" if "encrypted_value" in cols else None
-        host_col = (
-            "host_key" if "host_key" in cols else
-            "host" if "host" in cols else
-            "domain" if "domain" in cols else None
-        )
-        if not host_col:
-            raise RuntimeError(f"No host column: {cols}")
-
-        select_cols = f"{name_col}, {value_col}"
-        if enc_col:
-            select_cols += f", {enc_col}"
-        sql = (
-            f"SELECT {select_cols} FROM {cookie_table} "
-            f"WHERE {host_col} LIKE '%claude.ai%'"
-        )
-        diag(f"query: {sql}")
-        cur.execute(sql)
-        rows = cur.fetchall()
-        diag(f"rows for claude.ai: {len(rows)}")
-        for row in rows:
-            name = row[0]
-            value = row[1]
-            enc = row[2] if enc_col else None
-            if value:
-                cookies[name] = value
-                plain_ok += 1
-                continue
-            decoded = decrypt_value(enc, key) if enc else ""
-            if decoded:
-                cookies[name] = decoded
-                encrypted_ok += 1
-            else:
-                encrypted_fail += 1
-                diag(f"  decrypt FAIL cookie: {name}")
-        conn.close()
     finally:
-        # Clean up the whole temp dir
         try:
             shutil.rmtree(tmp_dir, ignore_errors=True)
         except Exception:
             pass
-    diag(
-        f"cookies decoded: plain={plain_ok}, "
-        f"encrypted_ok={encrypted_ok}, encrypted_fail={encrypted_fail}"
-    )
-    diag(f"cookie names: {sorted(cookies.keys())}")
-    return cookies
 
 print("get_claude_desktop_cookies ready")
 
@@ -1247,7 +1255,13 @@ class SetupDialog(QDialog):
         self.manual_check = QCheckBox("Use manual values instead")
         self.manual_check.setChecked(bool(cfg.get("manual_override")))
 
+        self.follow_check = QCheckBox(
+            "Show only when Claude Desktop is running"
+        )
+        self.follow_check.setChecked(bool(cfg.get("follow_claude_desktop")))
+
         adv_layout.addRow("Auto-sniff browser:", self.browser_combo)
+        adv_layout.addRow(self.follow_check)
         adv_layout.addRow(self.manual_check)
         manual_btn = QPushButton("Edit manual values…")
         manual_btn.clicked.connect(self._edit_manual)
@@ -1331,6 +1345,7 @@ class SetupDialog(QDialog):
         out["browser"] = self.browser_combo.currentText()
         out["cookie_string"] = self.cookie_string_field.text().strip()
         out["manual_override"] = self.manual_check.isChecked()
+        out["follow_claude_desktop"] = self.follow_check.isChecked()
         out["setup_browser"] = self.setup_browser_combo.currentText()
         return out
 
@@ -1353,6 +1368,12 @@ class UsageBar(QWidget):
         self.timer.timeout.connect(self.refresh)
         self.timer.start(POLL_SECONDS * 1000)
         QTimer.singleShot(400, self.refresh)
+
+        # Follow Claude Desktop: poll every 3 s and show/hide accordingly
+        self._follow_timer = QTimer(self)
+        self._follow_timer.timeout.connect(self._check_claude_follow)
+        self._follow_timer.start(3000)
+
         # First-run: if there's no config at all, push the user into Setup
         # immediately with a welcome explanation
         if self._is_first_run():
@@ -1393,6 +1414,20 @@ class UsageBar(QWidget):
             self._open_setup_dialog()
         elif clicked == manual_btn:
             self._open_manual_dialog()
+
+    #------------
+    # Show/hide the bar based on whether Claude Desktop is running.
+    # Only active when follow_claude_desktop is enabled in config.
+    #------------
+    def _check_claude_follow(self):
+        if not self.cfg.get("follow_claude_desktop"):
+            return
+        running = is_claude_desktop_running()
+        if running and not self.isVisible():
+            self.show()
+            self.refresh()
+        elif not running and self.isVisible():
+            self.hide()
 
     #------------
     # Construct the frameless always-on-top layout
@@ -1562,30 +1597,34 @@ class UsageBar(QWidget):
         def hit(w):
             return w.rect().contains(w.mapFromGlobal(gpos))
 
-        if hit(self.session_label) or hit(self.session_bar):
-            tip = self.session_label.toolTip()
-            if tip:
-                QToolTip.showText(gpos, tip)
-            return
-        if hit(self.weekly_label) or hit(self.weekly_bar):
-            tip = self.weekly_label.toolTip()
-            if tip:
-                QToolTip.showText(gpos, tip)
-            return
+        # Session/week LABEL only: swap text with reset time while held.
+        # The progress bar is drag-only — no text swap there.
+        if hit(self.session_label):
+            reset = self.session_label.toolTip()
+            if reset:
+                self._held_label = self.session_label
+                self._held_original = self.session_label.text()
+                self.session_label.setText(reset)
+        elif hit(self.weekly_label):
+            reset = self.weekly_label.toolTip()
+            if reset:
+                self._held_label = self.weekly_label
+                self._held_original = self.weekly_label.text()
+                self.weekly_label.setText(reset)
+        else:
+            on_status = self.status_label.rect().contains(
+                self.status_label.mapFromGlobal(gpos)
+            )
+            if on_status and self.current_status == "AUTH":
+                self._open_setup_dialog()
+                return
+            if on_status and self.current_status == "PARSE":
+                self._open_manual_dialog()
+                return
+            if on_status and self.current_status in ("OK", "MANUAL"):
+                self._open_details_dialog()
+                return
 
-        on_status = self.status_label.rect().contains(
-            self.status_label.mapFromGlobal(gpos)
-        )
-        if on_status and self.current_status == "AUTH":
-            self._open_setup_dialog()
-            return
-        if on_status and self.current_status == "PARSE":
-            self._open_manual_dialog()
-            return
-        if on_status and self.current_status in ("OK", "MANUAL"):
-            self._open_details_dialog()
-            return
-        # Anywhere else: drag
         self.drag_pos = gpos - self.frameGeometry().topLeft()
         event.accept()
 
@@ -1595,6 +1634,10 @@ class UsageBar(QWidget):
             event.accept()
 
     def mouseReleaseEvent(self, event):
+        if getattr(self, "_held_label", None):
+            self._held_label.setText(self._held_original)
+            self._held_label = None
+            self._held_original = None
         self.drag_pos = None
 
     #------------
@@ -1680,6 +1723,9 @@ def main():
     app.setWindowIcon(make_app_icon())
     bar = UsageBar()
     bar.show()
+    # If follow mode is on and Desktop isn't running yet, start hidden
+    if bar.cfg.get("follow_claude_desktop") and not is_claude_desktop_running():
+        bar.hide()
     sys.exit(app.exec())
 
 if __name__ == "__main__":
