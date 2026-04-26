@@ -10,9 +10,11 @@ if not exist ".venv\Scripts\pythonw.exe" (
     python -m venv .venv
     call .venv\Scripts\activate.bat
     pip install --upgrade pip
-    pip install -r requirements.txt
     call .venv\Scripts\deactivate.bat
 )
+
+REM Always sync deps so new requirements (e.g. curl_cffi) are picked up
+call .venv\Scripts\pip install -q -r requirements.txt
 
 REM Launch silently
 start "" ".venv\Scripts\pythonw.exe" "claude_usage_bar.py"

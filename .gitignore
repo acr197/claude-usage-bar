@@ -1,6 +1,18 @@
-build/ 
-dist/ 
-__pycache__/ 
-*.pyc 
-.venv/ 
-*.ico 
+build/
+dist/
+__pycache__/
+*.pyc
+.venv/
+*.ico
+
+# IDE artifacts
+.idea/
+.vscode/
+
+# App diagnostic artifacts (if app is run from repo dir)
+diagnostic.log
+last_unparsed.html
+*.log
+
+# Claude Code IDE settings
+.claude/

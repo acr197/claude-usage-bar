@@ -96,7 +96,7 @@ exe = EXE(
     # console=False hides the terminal window when launched
     console=False,
     disable_windowed_traceback=False,
-    # Icon file - place a claude_usage_bar.ico in the same folder
-    # or remove this line if you don't have one
+    # Run make_icon.py once before building to generate this file
+    icon='claude_usage_bar.ico',
     version=None,
 )

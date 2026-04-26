@@ -1,5 +1,5 @@
 ; Claude Usage Bar - Inno Setup Installer Script
-; Version 0.1.2
+; Version 0.2.0
 ;
 ; Prerequisites:
 ;   1. Run PyInstaller first to produce dist\ClaudeUsageBar.exe
@@ -11,7 +11,7 @@
 
 [Setup]
 AppName=Claude Usage Bar
-AppVersion=0.1.2
+AppVersion=0.2.0
 AppPublisher=Claude Usage Bar
 AppPublisherURL=https://github.com/acr197/claude-usage-bar
 AppSupportURL=https://github.com/acr197/claude-usage-bar/issues

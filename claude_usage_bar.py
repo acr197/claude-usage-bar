@@ -1,6 +1,6 @@
 # ============================================================
 # Claude Usage Bar - always-on-top Windows widget
-# Version 0.1.2
+# Version 0.2.0
 # Shows Claude.ai Pro/Max usage limits as a thin bar pinned to
 # the bottom of your primary monitor.
 #
@@ -20,7 +20,6 @@ import sys
 import os
 import re
 import json
-import random
 import sqlite3
 import shutil
 import base64
@@ -47,10 +46,12 @@ from PySide6.QtWidgets import (
     QApplication, QWidget, QLabel, QHBoxLayout, QVBoxLayout,
     QProgressBar, QMenu, QDialog, QLineEdit, QPushButton,
     QFormLayout, QCheckBox, QComboBox, QMessageBox, QSpinBox,
-    QDialogButtonBox
+    QDialogButtonBox, QToolTip
 )
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QGuiApplication, QDesktopServices
+from PySide6.QtGui import (
+    QGuiApplication, QDesktopServices, QIcon, QPixmap, QPainter, QColor, QBrush
+)
 from PySide6.QtCore import QUrl
 
 #------------
@@ -95,6 +96,30 @@ def reset_diag():
         DIAG_LOG_PATH.write_text("", encoding="utf-8")
     except Exception:
         pass
+
+#------------
+# Generate a 32x32 icon showing two progress bars on a dark background
+#------------
+def make_app_icon():
+    px = QPixmap(32, 32)
+    px.fill(QColor(0, 0, 0, 0))
+    p = QPainter(px)
+    p.setRenderHint(QPainter.Antialiasing)
+    p.setPen(Qt.NoPen)
+    p.setBrush(QBrush(QColor(28, 28, 32)))
+    p.drawRoundedRect(0, 0, 32, 32, 5, 5)
+    track = QColor(70, 70, 78)
+    fill = QColor(217, 119, 87)
+    p.setBrush(QBrush(track))
+    p.drawRoundedRect(4, 9, 24, 5, 2, 2)
+    p.setBrush(QBrush(fill))
+    p.drawRoundedRect(4, 9, 14, 5, 2, 2)
+    p.setBrush(QBrush(track))
+    p.drawRoundedRect(4, 18, 24, 5, 2, 2)
+    p.setBrush(QBrush(fill))
+    p.drawRoundedRect(4, 18, 9, 5, 2, 2)
+    p.end()
+    return QIcon(px)
 
 # Default config - cookie_string is the most reliable auth method since
 # it captures every cookie (including CF bot-defeat cookies) in one paste
@@ -773,13 +798,6 @@ print("try_usage_apis ready")
 # Returns (data_dict, status_string)
 #------------
 def get_usage(cfg):
-    if cfg.get("demo_mode"):
-        return {
-            "session_pct": random.randint(10, 80),
-            "weekly_pct": random.randint(5, 60),
-            "session_reset": "in ~3h",
-            "weekly_reset": "Thu"
-        }, "DEMO"
     if cfg.get("manual_override"):
         return {
             "session_pct": cfg.get("manual_session_pct", 0),
@@ -1027,9 +1045,7 @@ class DetailsDialog(QDialog):
             root.addWidget(wrap)
 
         # Source note so users know where the numbers came from
-        if cfg.get("demo_mode"):
-            source = "Demo mode (fake values)"
-        elif cfg.get("manual_override"):
+        if cfg.get("manual_override"):
             source = "Manual values (set by you)"
         else:
             source = f"Live from claude.ai, updated {datetime.now().strftime('%H:%M:%S')}"
@@ -1228,14 +1244,10 @@ class SetupDialog(QDialog):
         if idx >= 0:
             self.browser_combo.setCurrentIndex(idx)
 
-        self.demo_check = QCheckBox("Demo mode (fake values)")
-        self.demo_check.setChecked(bool(cfg.get("demo_mode")))
-
         self.manual_check = QCheckBox("Use manual values instead")
         self.manual_check.setChecked(bool(cfg.get("manual_override")))
 
         adv_layout.addRow("Auto-sniff browser:", self.browser_combo)
-        adv_layout.addRow(self.demo_check)
         adv_layout.addRow(self.manual_check)
         manual_btn = QPushButton("Edit manual values…")
         manual_btn.clicked.connect(self._edit_manual)
@@ -1286,12 +1298,12 @@ class SetupDialog(QDialog):
         self.test_result.setText("Testing…")
         QApplication.processEvents()
         test_cfg = dict(self.cfg)
-        test_cfg["demo_mode"] = self.demo_check.isChecked()
+        test_cfg["demo_mode"] = False
         test_cfg["browser"] = self.browser_combo.currentText()
         test_cfg["cookie_string"] = self.cookie_string_field.text().strip()
         test_cfg["manual_override"] = self.manual_check.isChecked()
         data, status = get_usage(test_cfg)
-        if status in ("OK", "DEMO", "MANUAL"):
+        if status in ("OK", "MANUAL"):
             self.test_result.setText(
                 f"✓ Connected: Session {data.get('session_pct', '?')}%, "
                 f"Week {data.get('weekly_pct', '?')}%"
@@ -1316,7 +1328,6 @@ class SetupDialog(QDialog):
     #------------
     def get_config(self):
         out = dict(self.cfg)
-        out["demo_mode"] = self.demo_check.isChecked()
         out["browser"] = self.browser_combo.currentText()
         out["cookie_string"] = self.cookie_string_field.text().strip()
         out["manual_override"] = self.manual_check.isChecked()
@@ -1375,7 +1386,6 @@ class UsageBar(QWidget):
         )
         setup_btn = box.addButton("Setup", QMessageBox.AcceptRole)
         manual_btn = box.addButton("Manual values", QMessageBox.ActionRole)
-        demo_btn = box.addButton("Try demo mode", QMessageBox.ActionRole)
         box.addButton("Later", QMessageBox.RejectRole)
         box.exec()
         clicked = box.clickedButton()
@@ -1383,10 +1393,6 @@ class UsageBar(QWidget):
             self._open_setup_dialog()
         elif clicked == manual_btn:
             self._open_manual_dialog()
-        elif clicked == demo_btn:
-            self.cfg["demo_mode"] = True
-            save_config(self.cfg)
-            self.refresh()
 
     #------------
     # Construct the frameless always-on-top layout
@@ -1482,7 +1488,7 @@ class UsageBar(QWidget):
     def refresh(self):
         data, status = get_usage(self.cfg)
         self.current_status = status
-        if status in ("OK", "DEMO", "MANUAL"):
+        if status in ("OK", "MANUAL"):
             self._display(data, status)
         elif status == "AUTH":
             self._display_error(data.get("error", ""), "Click to set up")
@@ -1505,22 +1511,24 @@ class UsageBar(QWidget):
         self.weekly_bar.setValue(w)
         self.session_label.setText(f"Session {s}%")
         self.weekly_label.setText(f"Week {w}%")
+        s_reset = data.get("session_reset", "") or ""
+        w_reset = data.get("weekly_reset", "") or ""
+        for w in (self.session_label, self.session_bar):
+            w.setToolTip(s_reset)
+        for w in (self.weekly_label, self.weekly_bar):
+            w.setToolTip(w_reset)
         self.status_label.setObjectName("status_ok")
         self.status_label.setStyleSheet("")
-        tip_prefix = ""
-        if status == "DEMO":
-            tip_prefix = "DEMO MODE\n"
-            self.status_label.setText("demo")
-        elif status == "MANUAL":
-            tip_prefix = "MANUAL VALUES\n"
+        if status == "MANUAL":
             self.status_label.setText("manual")
+            tip_prefix = "MANUAL VALUES\n"
         else:
-            now = datetime.now().strftime("%H:%M")
-            self.status_label.setText(now)
+            self.status_label.setText(datetime.now().strftime("%H:%M"))
+            tip_prefix = ""
         self.setToolTip(
             f"{tip_prefix}Session resets: {data.get('session_reset', '')}\n"
             f"Weekly resets: {data.get('weekly_reset', '')}\n\n"
-            f"Right-click for details"
+            f"Click the time for details. Right-click for menu."
         )
 
     #------------
@@ -1531,32 +1539,54 @@ class UsageBar(QWidget):
         self.weekly_label.setText("Week —")
         self.session_bar.setValue(0)
         self.weekly_bar.setValue(0)
+        for w in (self.session_label, self.session_bar,
+                  self.weekly_label, self.weekly_bar):
+            w.setToolTip("")
         self.status_label.setObjectName("status_warn")
         self.status_label.setStyleSheet("color: #ffb86c;")
         self.status_label.setText(label)
-        self.setToolTip(f"{label}\n{err}\n\nRight-click the bar for options.")
+        self.setToolTip(f"{label}\n{err}\n\nRight-click for options.")
 
     #------------
-    # Left-click: drag unless the click lands on the status label text
-    # In AUTH state, status label clicks jump straight to Setup.
-    # In PARSE state, status label clicks open Manual Entry.
+    # Left-click routing:
+    #   session label/bar  → pop reset-time bubble
+    #   week label/bar     → pop reset-time bubble
+    #   status label       → Setup / Manual / Details depending on state
+    #   anywhere else      → drag
     #------------
     def mousePressEvent(self, event):
         if event.button() != Qt.LeftButton:
             return
-        label_pos = self.status_label.mapFromGlobal(event.globalPosition().toPoint())
-        on_status = self.status_label.rect().contains(label_pos)
+        gpos = event.globalPosition().toPoint()
+
+        def hit(w):
+            return w.rect().contains(w.mapFromGlobal(gpos))
+
+        if hit(self.session_label) or hit(self.session_bar):
+            tip = self.session_label.toolTip()
+            if tip:
+                QToolTip.showText(gpos, tip)
+            return
+        if hit(self.weekly_label) or hit(self.weekly_bar):
+            tip = self.weekly_label.toolTip()
+            if tip:
+                QToolTip.showText(gpos, tip)
+            return
+
+        on_status = self.status_label.rect().contains(
+            self.status_label.mapFromGlobal(gpos)
+        )
         if on_status and self.current_status == "AUTH":
             self._open_setup_dialog()
             return
         if on_status and self.current_status == "PARSE":
             self._open_manual_dialog()
             return
+        if on_status and self.current_status in ("OK", "MANUAL"):
+            self._open_details_dialog()
+            return
         # Anywhere else: drag
-        self.drag_pos = (
-            event.globalPosition().toPoint()
-            - self.frameGeometry().topLeft()
-        )
+        self.drag_pos = gpos - self.frameGeometry().topLeft()
         event.accept()
 
     def mouseMoveEvent(self, event):
@@ -1647,6 +1677,7 @@ class UsageBar(QWidget):
 def main():
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(True)
+    app.setWindowIcon(make_app_icon())
     bar = UsageBar()
     bar.show()
     sys.exit(app.exec())
