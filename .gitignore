@@ -14,5 +14,7 @@ diagnostic.log
 last_unparsed.html
 *.log
 
-# Claude Code IDE settings
+# Claude / agent dev files (not shipped)
 .claude/
+CLAUDE.md
+AGENTS.md

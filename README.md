@@ -1,6 +1,6 @@
 # Claude Usage Bar
 
-Version 0.3.0
+Version 0.3.2
 
 ![Claude Usage Bar](screenshot.png)
 
@@ -46,4 +46,4 @@ Your session cookie is stored in `%APPDATA%\ClaudeUsageBar\config.json`. It is s
 
 ## Colophon
 
-Published by AppCaddy. Author, Andrew Ryan.
+Published by AppCaddy.

@@ -1,6 +1,6 @@
 # ============================================================
 # Claude Usage Bar - always-on-top Windows widget
-# Version 0.3.1
+# Version 0.3.2
 # Shows Claude.ai Pro/Max usage limits as a thin bar pinned to
 # the bottom of your primary monitor.
 #
@@ -48,7 +48,7 @@ from PySide6.QtWidgets import (
     QApplication, QWidget, QLabel, QHBoxLayout, QVBoxLayout,
     QProgressBar, QMenu, QDialog, QLineEdit, QPushButton,
     QFormLayout, QCheckBox, QComboBox, QMessageBox, QSpinBox,
-    QDialogButtonBox
+    QDialogButtonBox, QFrame
 )
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import (
@@ -72,6 +72,14 @@ USAGE_URL = "https://claude.ai/settings/usage"
 
 # Poll interval in seconds
 POLL_SECONDS = 120
+
+# App version. The single in-app source of truth for the About line.
+# Keep installer.iss (AppVersion) and the README in sync when bumping.
+APP_VERSION = "0.3.2"
+
+# Shared AppCaddy links, identical across every product.
+SUPPORT_URL = "https://buymeacoffee.com/AppCaddy"
+APPCADDY_URL = "https://appcaddy.app"
 
 # Diagnostic log path - rewritten every refresh so we always have fresh info
 DIAG_LOG_PATH = APP_DIR / "diagnostic.log"
@@ -1161,6 +1169,21 @@ class SetupDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
 
+        # --- AppCaddy wordmark, top-right of the settings surface ---
+        # Per the studio layout the wordmark sits on the settings screen only,
+        # linked to the studio home page. setOpenExternalLinks routes the click
+        # to the default browser.
+        wordmark_row = QHBoxLayout()
+        wordmark_row.addStretch()
+        wordmark = QLabel(
+            f'<a href="{APPCADDY_URL}" style="color:#888888; text-decoration:none;">AppCaddy</a>'
+        )
+        wordmark.setTextFormat(Qt.RichText)
+        wordmark.setOpenExternalLinks(True)
+        wordmark.setStyleSheet("font-size: 11px;")
+        wordmark_row.addWidget(wordmark)
+        layout.addLayout(wordmark_row)
+
         # --- Browser picker at top ---
         picker_row = QHBoxLayout()
         picker_row.addWidget(QLabel("Your browser:"))
@@ -1268,6 +1291,26 @@ class SetupDialog(QDialog):
         manual_btn.clicked.connect(self._edit_manual)
         adv_layout.addRow(manual_btn)
         layout.addWidget(self.adv_panel)
+
+        # --- About (name, version, studio). Version comes from APP_VERSION so
+        # it is never a second hand-typed string. ---
+        about_divider = QFrame()
+        about_divider.setFrameShape(QFrame.HLine)
+        about_divider.setStyleSheet("color: rgba(255,255,255,0.08);")
+        layout.addWidget(about_divider)
+
+        about_lbl = QLabel(
+            f"Claude Usage Bar  ·  v{APP_VERSION}  ·  Published by AppCaddy."
+        )
+        about_lbl.setStyleSheet("color: #888888; font-size: 10px;")
+        layout.addWidget(about_lbl)
+
+        # --- Support. The Buy Me a Coffee button is always the last block. ---
+        coffee_btn = QPushButton("Buy me a coffee")
+        coffee_btn.clicked.connect(
+            lambda: QDesktopServices.openUrl(QUrl(SUPPORT_URL))
+        )
+        layout.addWidget(coffee_btn)
 
         # --- Save/Cancel ---
         buttons = QDialogButtonBox(
